@@ -1,0 +1,66 @@
+ARG wg_conf
+ARG wg_network_address
+ARG wg_jail
+ARG wg_from_port
+ARG wg_target_port
+ARG wg_proto=tcp
+ARG wg_pf_conf=files/pf.conf
+
+OPTION healthcheck
+
+INCLUDE options/options.makejail
+INCLUDE options/network.makejail
+INCLUDE options/devfs.makejail
+INCLUDE pkg.makejail
+
+RAW _jail_address=`appjail jail get -I -- "${wg_jail}" network_ip4` || exit $?
+RAW if [ -z "${_jail_address}" ]; then
+RAW     echo "###> ${wg_jail} doesn't have an IPv4 address assigned <###"
+RAW     exit 1
+RAW fi
+
+VAR --make-arg-env wg_jail_address=${_jail_address}
+
+RAW _external_interface=`appjail cmd jexec "${APPJAIL_JAILNAME}" route -4 get default | grep 'interface: ' | cut -d' ' -f4-` || exit $?
+RAW if [ -z "${_external_interface}" ]; then
+RAW     echo "###> Could not get external interface for this jail <###"
+RAW     exit 1
+RAW fi
+
+VAR wg_external_interface=${_external_interface}
+
+RAW echo "======> Installing WireGuard <======"
+PKG wireguard-tools
+
+RAW echo "======> Configuring WireGuard interface <======"
+COPY --verbose ${wg_conf} /usr/local/etc/wireguard/wg0.conf
+SYSRC wireguard_enable=YES
+SYSRC wireguard_interfaces=wg0
+
+RAW echo "======> Starting WireGuard <======"
+SERVICE wireguard start
+
+RAW echo "======> Configuring pf <======"
+COPY --verbose ${wg_pf_conf} /etc/pf.conf
+REPLACE /etc/pf.conf INTERFACE ${wg_external_interface}
+REPLACE /etc/pf.conf NETWORK_ADDRESS ${wg_network_address}
+REPLACE /etc/pf.conf FROM_PORT ${wg_from_port}
+REPLACE /etc/pf.conf TARGET_PORT ${wg_target_port}
+REPLACE /etc/pf.conf PROTO ${wg_proto}
+
+RAW echo "======> Jail '${wg_jail}' has '${wg_jail_address}' as its IPv4 address <======"
+CMD echo "${wg_jail_address}" > /.jail.address
+
+RAW echo "======> Starting pf <======"
+SYSRC pf_enable=YES
+SERVICE pf start
+
+RAW echo "======> Configuring IP forwarding <======"
+SYSRC gateway_enable=YES
+CMD sysctl net.inet.ip.forwarding=1
+
+RAW echo "======> Configuring optional services <======"
+INCLUDE gh+DtxdF/efficient-makejail
+
+RAW echo "======> Done <======"
+CMD touch /.done

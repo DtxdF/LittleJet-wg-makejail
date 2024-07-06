@@ -1,0 +1,97 @@
+ARG wg_conf
+ARG wg_pen_services
+ARG wg_pen_port
+ARG wg_pen_blacklist=6
+ARG wg_pen_tracked_seconds=0
+ARG wg_pen_max_clients=2048
+ARG wg_pen_backlog=500
+ARG wg_pen_timeout=10
+ARG wg_pen_max_simultaneous_connections=500
+ARG wg_pen_use_udp=0
+ARG wg_pen_use_http_header=0
+ARG wg_pen_use_hash=0
+ARG wg_pen_use_roundrobin=0
+ARG wg_pen_use_stubborn=0
+ARG wg_pen_use_weight=0
+ARG wg_pen_use_prio=0
+ARG wg_pen_multi_accept=256
+
+OPTION healthcheck
+OPTION healthcheck="health_cmd:jail:service pen status" "recover_cmd:jail:service pen restart"
+
+INCLUDE options/options.makejail
+INCLUDE options/network.makejail
+INCLUDE pkg.makejail
+
+RAW echo "======> Installing scripts <======"
+COPY --verbose scripts/load-balancer /scripts
+
+RAW echo "======> Installing dependencies <======"
+PKG wireguard-tools pen
+
+RAW echo "======> Configuring WireGuard interface <======"
+COPY --verbose ${wg_conf} /usr/local/etc/wireguard/wg0.conf
+SYSRC wireguard_enable=YES
+SYSRC wireguard_interfaces=wg0
+
+RAW echo "======> Starting WireGuard <======"
+SERVICE wireguard start
+
+RAW echo "======> Configuring pen <======"
+CMD pw useradd -n pen -d /nonexistent -s /sbin/nologin
+SYSRC pen_enable=YES
+
+CMD mkdir -p /usr/local/etc/pen
+CMD touch /usr/local/etc/pen/pen.cfg
+
+RAW pen_flags="-C /var/run/pen.ctl -u pen -F /usr/local/etc/pen/pen.cfg -m ${wg_pen_multi_accept} -b ${wg_pen_blacklist} -T ${wg_pen_tracked_seconds} -c ${wg_pen_max_clients} -q ${wg_pen_backlog} -t ${wg_pen_timeout} -x ${wg_pen_max_simultaneous_connections}"
+
+RAW if [ "${wg_pen_use_udp}" != 0 ]; then
+    RAW pen_flags="${pen_flags} -U"
+RAW fi
+
+RAW if [ "${wg_pen_use_http_header}" != 0 ]; then
+    RAW pen_flags="${pen_flags} -H"
+RAW fi
+
+RAW if [ "${wg_pen_use_hash}" != 0 ]; then
+    RAW pen_flags="${pen_flags} -h"
+RAW fi
+
+RAW if [ "${wg_pen_use_roundrobin}" != 0 ]; then
+    RAW pen_flags="${pen_flags} -r"
+RAW fi
+
+RAW if [ "${wg_pen_use_stubborn}" != 0 ]; then
+    RAW pen_flags="${pen_flags} -s"
+RAW fi
+
+RAW if [ "${wg_pen_use_weight}" != 0 ]; then
+    RAW pen_flags="${pen_flags} -W"
+RAW fi
+
+RAW if [ "${wg_pen_use_prio}" != 0 ]; then
+    RAW pen_flags="${pen_flags} -o prio"
+RAW fi
+
+RAW pen_flags="${pen_flags} -- ${wg_pen_port}"
+
+RAW srvind=0
+RAW echo "${wg_pen_services}" | tr ';' '\n' | while IFS= read -r service; do
+    RAW appjail cmd jexec "${APPJAIL_JAILNAME}" sh -c "echo server ${srvind} ${service} >> /usr/local/etc/pen/pen.cfg"
+    RAW srvind=$((srvind+1))
+RAW done
+
+SYSRC "pen_flags=${pen_flags}"
+
+RAW echo "======> Starting pen <======"
+SERVICE pen start
+
+RAW echo "======> Checking status of pen <======"
+SERVICE pen status
+
+RAW echo "======> Configuring optional services <======"
+INCLUDE gh+DtxdF/efficient-makejail
+
+RAW echo "======> Done <======"
+CMD touch /.done

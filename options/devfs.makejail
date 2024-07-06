@@ -1,0 +1,5 @@
+OPTION mount_devfs
+OPTION device=include \$devfsrules_hide_all
+OPTION device=include \$devfsrules_unhide_basic
+OPTION device=include \$devfsrules_unhide_login
+OPTION device=path pf unhide
